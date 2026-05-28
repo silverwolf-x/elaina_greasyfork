@@ -19,6 +19,14 @@
 function main(config) {
   const gatewayDoh = "https://i4cm5lqxfu.cloudflare-gateway.com/dns-query";
   const directName = "DIRECT-V6优先";
+  const v6Dns = [
+    "https://doh.pub/dns-query#disable-ipv4=true",
+    "https://dns.alidns.com/dns-query#disable-ipv4=true",
+  ];
+  const v6DnsPolicy = {
+    "rule-set:cdn": v6Dns,
+    "rule-set:pure-v6": v6Dns,
+  };
   const fakeIpFilters = ["geosite:private", "geosite:category-ntp"];
   const snifferSkipDomains = [
     "Mijia Cloud",
@@ -77,6 +85,29 @@ function main(config) {
   const currentFakeIpFilters = Array.isArray(dns["fake-ip-filter"])
     ? dns["fake-ip-filter"]
     : [];
+  const currentNameserverPolicy =
+    dns["nameserver-policy"] && typeof dns["nameserver-policy"] === "object"
+      ? dns["nameserver-policy"]
+      : {};
+
+  // DNS rule-provider：供 nameserver-policy 的 rule-set:cdn 使用。
+  config["rule-providers"] = {
+    ...(config["rule-providers"] || {}),
+    cdn: {
+      type: "http",
+      behavior: "domain",
+      format: "text",
+      url: "https://ruleset.skk.moe/Clash/domainset/cdn.txt",
+      interval: 86400,
+    },
+    "pure-v6": {
+      type: "http",
+      behavior: "domain",
+      format: "text",
+      url: "https://raw.githubusercontent.com/silverwolf-x/elaina_greasyfork/main/rules/pure-v6.txt",
+      interval: 86400,
+    },
+  };
 
   config.dns = {
     ...dns,
@@ -120,6 +151,12 @@ function main(config) {
       gatewayDoh,
       "https://dns.alidns.com/dns-query",
     ],
+
+    // 命中这些域名 / rule-set 时，只使用 v6Dns 这组 DNS；disable-ipv4 会让 A 记录返回空，强制走 AAAA。
+    "nameserver-policy": {
+      ...currentNameserverPolicy,
+      ...v6DnsPolicy,
+    },
   };
 
   // 静态节点：仅在缺省时补充 IPv6 优先，尊重订阅里已有的 ip-version。
