@@ -5,29 +5,47 @@
  * 1. 符合 Mihomo Party JavaScript 覆写规则：入口为 main(config)，返回 config。
  * 2. 全局开启 IPv6，并启用 tcp-concurrent。
  * 3. DNS 使用 fake-ip 模式。
- * 4. DNS 合并 linux.do 极简 fake-ip 模板，并加入指定 Cloudflare Gateway DoH。
+ * 4. DNS 合并指定 fake-ip 模板。
  * 5. fake-ip-range6 使用 fdfe:dcba:9876::1/64，fake-ip-filter 使用极简 geosite 集合：
  *    - geosite:private
  *    - geosite:category-ntp
  * 6. 静态 proxies 和 proxy-providers 仅在缺省时补充 ip-version: ipv6-prefer。
- * 7. 策略组通过组内节点、provider override 和 DIRECT-V6优先 实现 IPv6 优先。
- * 8. 新增 DIRECT-V6优先 直连节点，并把规则里的 DIRECT 替换过去。
- * 9. 开启保守域名嗅探，提高 fake-ip / TUN 场景下的分流准确率。
- * 10. 不强制开启 TUN，不默认阻断 QUIC。
+ * 7. nameserver-policy 直接写入需要强制 IPv6 DNS 的域名，并让直连 DNS 遵循 policy。
+ * 8. fake-ip-filter 也写入强制 IPv6 目标，避免这些域名继续返回 IPv4 fake-ip。
+ * 9. 新增 DIRECT-V6仅IPv6 直连节点和前置规则，让指定域名连接层只使用 IPv6。
+ * 10. 策略组通过组内节点、provider override 和 DIRECT-V6优先 实现常规 IPv6 优先。
+ * 11. 新增 DIRECT-V6优先 直连节点，并把规则里的 DIRECT 替换过去。
+ * 12. 开启保守域名嗅探，提高 fake-ip / TUN 场景下的分流准确率。
+ * 13. 不强制开启 TUN，不默认阻断 QUIC。
  */
 
 function main(config) {
   const gatewayDoh = "https://i4cm5lqxfu.cloudflare-gateway.com/dns-query";
   const directName = "DIRECT-V6优先";
+  const directOnlyName = "DIRECT-V6仅IPv6";
+  const cnDns = [
+    "https://doh.pub/dns-query",
+    "https://dns.alidns.com/dns-query",
+  ];
   const v6Dns = [
     "https://doh.pub/dns-query#disable-ipv4=true",
     "https://dns.alidns.com/dns-query#disable-ipv4=true",
   ];
+  const v6PolicyDomains = [
+    "b2.civitai.com",
+    "autopatchcn.yuanshen.com",
+    "autopatchcn.bhsr.com",
+    "+.wmupd.com",
+    "finder.video.qq.com",
+    "+.cdn.office.net",
+    "+.bilivideo.com",
+  ];
   const v6DnsPolicy = {
     "rule-set:cdn": v6Dns,
-    "rule-set:pure-v6": v6Dns,
+    ...Object.fromEntries(v6PolicyDomains.map((domain) => [domain, v6Dns])),
   };
   const fakeIpFilters = ["geosite:private", "geosite:category-ntp"];
+  const v6FakeIpFilters = ["rule-set:cdn", ...v6PolicyDomains];
   const snifferSkipDomains = [
     "Mijia Cloud",
     "dlg.io.mi.com",
@@ -90,7 +108,18 @@ function main(config) {
       ? dns["nameserver-policy"]
       : {};
 
-  // DNS rule-provider：供 nameserver-policy 的 rule-set:cdn 使用。
+  const v6RouteRules = [
+    `RULE-SET,cdn,${directOnlyName}`,
+    ...v6PolicyDomains.map((domain) => {
+      if (domain.startsWith("+.")) {
+        return `DOMAIN-SUFFIX,${domain.slice(2)},${directOnlyName}`;
+      }
+
+      return `DOMAIN,${domain},${directOnlyName}`;
+    }),
+  ];
+
+  // DNS rule-provider：供 nameserver-policy / fake-ip-filter / rules 的 rule-set:cdn 使用。
   config["rule-providers"] = {
     ...(config["rule-providers"] || {}),
     cdn: {
@@ -98,13 +127,6 @@ function main(config) {
       behavior: "domain",
       format: "text",
       url: "https://ruleset.skk.moe/Clash/domainset/cdn.txt",
-      interval: 86400,
-    },
-    "pure-v6": {
-      type: "http",
-      behavior: "domain",
-      format: "text",
-      url: "https://raw.githubusercontent.com/silverwolf-x/elaina_greasyfork/main/rules/pure-v6.txt",
       interval: 86400,
     },
   };
@@ -119,10 +141,11 @@ function main(config) {
     "fake-ip-range": dns["fake-ip-range"] || "198.18.0.1/16",
     "fake-ip-range6": "fdfe:dcba:9876::1/64",
 
-    // blacklist 是默认逻辑：命中这些集合的域名返回 real-ip，其它继续 fake-ip
+    // blacklist 是默认逻辑：命中这些集合的域名返回 real-ip，其它继续 fake-ip。
+    // 强制 IPv6 的域名必须放进这里，否则 fake-ip 模式仍可能给 A 查询返回 198.18.* 假地址。
     "fake-ip-filter-mode": "blacklist",
     "fake-ip-filter": Array.from(
-      new Set([...currentFakeIpFilters, ...fakeIpFilters])
+      new Set([...currentFakeIpFilters, ...fakeIpFilters, ...v6FakeIpFilters])
     ),
 
     "use-hosts": false,
@@ -136,20 +159,19 @@ function main(config) {
       "1.0.0.1",
     ],
 
-    // 默认 DNS 包含指定 Cloudflare Gateway，并保留 Cloudflare / Google；
-    // 代理节点 DNS 和直连 DNS 包含指定 Cloudflare Gateway，并保留阿里。
-    nameserver: [
-      gatewayDoh,
-      "https://dns.cloudflare.com/dns-query",
-      "https://dns.google/dns-query",
-    ],
+    // 默认 DNS 和直连 DNS 使用国内 DoH，减少国内 CDN 被海外 DNS 调度到 IPv4 线路。
+    nameserver: cnDns,
     "proxy-server-nameserver": [
       gatewayDoh,
       "https://dns.alidns.com/dns-query",
     ],
-    "direct-nameserver": [
-      gatewayDoh,
-      "https://dns.alidns.com/dns-query",
+    "direct-nameserver": cnDns,
+    "direct-nameserver-follow-policy": true,
+    fallback: [
+      "https://doh.dns.sb/dns-query",
+      "https://dns.google/dns-query",
+      "https://1.1.1.1/dns-query",
+      "https://1.0.0.1/dns-query",
     ],
 
     // 命中这些域名 / rule-set 时，只使用 v6Dns 这组 DNS；disable-ipv4 会让 A 记录返回空，强制走 AAAA。
@@ -180,6 +202,16 @@ function main(config) {
       type: "direct",
       udp: true,
       "ip-version": "ipv6-prefer",
+    });
+  }
+
+  // 指定域名专用：仅 IPv6，不回落 IPv4。
+  if (!config.proxies.some((proxy) => proxy && proxy.name === directOnlyName)) {
+    config.proxies.push({
+      name: directOnlyName,
+      type: "direct",
+      udp: true,
+      "ip-version": "ipv6",
     });
   }
 
@@ -227,13 +259,14 @@ function main(config) {
   }
 
   // 规则：把目标为 DIRECT 的规则替换成 IPv6 优先直连节点。
-  if (Array.isArray(config.rules)) {
-    config.rules = config.rules.map((rule) => {
+  const existingRules = Array.isArray(config.rules) ? config.rules : [];
+  config.rules = Array.from(new Set([...v6RouteRules, ...existingRules])).map(
+    (rule) => {
       if (typeof rule !== "string") return rule;
 
       return rule.replace(/,DIRECT(,|$)/, `,${directName}$1`);
-    });
-  }
+    }
+  );
 
   return config;
 }
