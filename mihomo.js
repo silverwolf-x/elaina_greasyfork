@@ -40,12 +40,11 @@ function main(config) {
     "+.cdn.office.net",
     "+.bilivideo.com",
   ];
-  const v6DnsPolicy = {
-    "rule-set:cdn": v6Dns,
-    ...Object.fromEntries(v6PolicyDomains.map((domain) => [domain, v6Dns])),
-  };
+  const v6DnsPolicy = Object.fromEntries(
+    v6PolicyDomains.map((domain) => [domain, v6Dns])
+  );
   const fakeIpFilters = ["geosite:private", "geosite:category-ntp"];
-  const v6FakeIpFilters = ["rule-set:cdn", ...v6PolicyDomains];
+  const v6FakeIpFilters = [...v6PolicyDomains];
   const snifferSkipDomains = [
     "Mijia Cloud",
     "dlg.io.mi.com",
@@ -108,28 +107,13 @@ function main(config) {
       ? dns["nameserver-policy"]
       : {};
 
-  const v6RouteRules = [
-    `RULE-SET,cdn,${directOnlyName}`,
-    ...v6PolicyDomains.map((domain) => {
+  const v6RouteRules = v6PolicyDomains.map((domain) => {
       if (domain.startsWith("+.")) {
         return `DOMAIN-SUFFIX,${domain.slice(2)},${directOnlyName}`;
       }
 
       return `DOMAIN,${domain},${directOnlyName}`;
-    }),
-  ];
-
-  // DNS rule-provider：供 nameserver-policy / fake-ip-filter / rules 的 rule-set:cdn 使用。
-  config["rule-providers"] = {
-    ...(config["rule-providers"] || {}),
-    cdn: {
-      type: "http",
-      behavior: "domain",
-      format: "text",
-      url: "https://ruleset.skk.moe/Clash/domainset/cdn.txt",
-      interval: 86400,
-    },
-  };
+    });
 
   config.dns = {
     ...dns,
@@ -174,7 +158,7 @@ function main(config) {
       "https://1.0.0.1/dns-query",
     ],
 
-    // 命中这些域名 / rule-set 时，只使用 v6Dns 这组 DNS；disable-ipv4 会让 A 记录返回空，强制走 AAAA。
+    // 命中这些白名单域名时，只使用 v6Dns 这组 DNS；disable-ipv4 会让 A 记录返回空，强制走 AAAA。
     "nameserver-policy": {
       ...currentNameserverPolicy,
       ...v6DnsPolicy,
