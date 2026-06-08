@@ -23,10 +23,6 @@ function main(config) {
   const gatewayDoh = "https://i4cm5lqxfu.cloudflare-gateway.com/dns-query";
   const directName = "DIRECT-V6优先";
   const directOnlyName = "DIRECT-V6仅IPv6";
-  const cnDns = [
-    "https://doh.pub/dns-query",
-    "https://dns.alidns.com/dns-query",
-  ];
   const v6Dns = [
     "https://doh.pub/dns-query#disable-ipv4=true",
     "https://dns.alidns.com/dns-query#disable-ipv4=true",
@@ -108,12 +104,12 @@ function main(config) {
       : {};
 
   const v6RouteRules = v6PolicyDomains.map((domain) => {
-      if (domain.startsWith("+.")) {
-        return `DOMAIN-SUFFIX,${domain.slice(2)},${directOnlyName}`;
-      }
+    if (domain.startsWith("+.")) {
+      return `DOMAIN-SUFFIX,${domain.slice(2)},${directOnlyName}`;
+    }
 
-      return `DOMAIN,${domain},${directOnlyName}`;
-    });
+    return `DOMAIN,${domain},${directOnlyName}`;
+  });
 
   config.dns = {
     ...dns,
@@ -143,13 +139,21 @@ function main(config) {
       "1.0.0.1",
     ],
 
-    // 默认 DNS 和直连 DNS 使用国内 DoH，减少国内 CDN 被海外 DNS 调度到 IPv4 线路。
-    nameserver: cnDns,
+    // 默认 DNS 包含指定 Cloudflare Gateway，并保留 Cloudflare / Google；
+    // 代理节点 DNS 和直连 DNS 包含指定 Cloudflare Gateway，并保留阿里。
+    nameserver: [
+      gatewayDoh,
+      "https://dns.cloudflare.com/dns-query",
+      "https://dns.google/dns-query",
+    ],
     "proxy-server-nameserver": [
       gatewayDoh,
       "https://dns.alidns.com/dns-query",
     ],
-    "direct-nameserver": cnDns,
+    "direct-nameserver": [
+      gatewayDoh,
+      "https://dns.alidns.com/dns-query",
+    ],
     "direct-nameserver-follow-policy": true,
     fallback: [
       "https://doh.dns.sb/dns-query",
@@ -158,7 +162,7 @@ function main(config) {
       "https://1.0.0.1/dns-query",
     ],
 
-    // 命中这些白名单域名时，只使用 v6Dns 这组 DNS；disable-ipv4 会让 A 记录返回空，强制走 AAAA。
+    // 命中这些域名时，只使用 v6Dns 这组 DNS；disable-ipv4 会让 A 记录返回空，强制走 AAAA。
     "nameserver-policy": {
       ...currentNameserverPolicy,
       ...v6DnsPolicy,
