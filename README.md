@@ -6,3 +6,5 @@
 
 ## mihomo覆写配置
 https://raw.githubusercontent.com/silverwolf-x/elaina_greasyfork/main/mihomo.js
+
+仅开启TUN模式时，需要在chrome设立里的安全DNS设置 https://i4cm5lqxfu.cloudflare-gateway.com/dns-query 来避免一些网站弹出提示“访问本地设备”，DNS来源 [linuxdo](https://linux.do/t/topic/1150121)
